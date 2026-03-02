@@ -1,1 +1,325 @@
+import os
+import cv2
+import numpy as np
+import win32gui
+import win32ui
+import win32con
+import time
+import keyboard
+import pydirectinput
+import pyautogui
+import threading
+from pynput.keyboard import Controller, KeyCode
+import ctypes
 
+is_running = False
+image_dir = ""
+main_hwnd = None
+alt_hwnds = []
+classic_btn_coords = None
+kb_controller = Controller()
+
+def get_roblox_hwnds():
+    hwnds = []
+    def enum_windows_proc(hwnd, lParam):
+        if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd) == "Roblox":
+            hwnds.append(hwnd)
+    win32gui.EnumWindows(enum_windows_proc, 0)
+    return hwnds
+
+def force_foreground(hwnd):
+    try:
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        win32gui.SetForegroundWindow(hwnd)
+    except Exception:
+        pass
+
+
+def capture_window(hwnd):
+    try:
+        left, top, right, bottom = win32gui.GetClientRect(hwnd)
+        width = right - left
+        height = bottom - top
+        
+        if width <= 0 or height <= 0:
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            width = right - left
+            height = bottom - top
+            if width <= 0 or height <= 0:
+                 return None
+
+        hwndDC = win32gui.GetWindowDC(hwnd)
+        mfcDC  = win32ui.CreateDCFromHandle(hwndDC)
+        saveDC = mfcDC.CreateCompatibleDC()
+
+        saveBitMap = win32ui.CreateBitmap()
+        saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
+        saveDC.SelectObject(saveBitMap)
+
+        result = ctypes.windll.user32.PrintWindow(hwnd, saveDC.GetSafeHdc(), 3)
+        
+        if result != 1:
+            result = ctypes.windll.user32.PrintWindow(hwnd, saveDC.GetSafeHdc(), 0)
+
+        bmpinfo = saveBitMap.GetInfo()
+        bmpstr = saveBitMap.GetBitmapBits(True)
+        img = np.frombuffer(bmpstr, dtype='uint8')
+        img.shape = (bmpinfo['bmHeight'], bmpinfo['bmWidth'], 4)
+        
+        win32gui.DeleteObject(saveBitMap.GetHandle())
+        saveDC.DeleteDC()
+        mfcDC.DeleteDC()
+        win32gui.ReleaseDC(hwnd, hwndDC)
+
+        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        
+    except Exception as e:
+        print(f"Capture error: {e}")
+        return None
+
+def find_image_in_hwnd(hwnd, template_name, threshold=0.75):
+    img = capture_window(hwnd)
+    if img is None:
+        return None
+        
+    template_path = os.path.join(image_dir, template_name)
+    template = cv2.imread(template_path)
+    if template is None:
+        return None
+        
+    res = cv2.matchTemplate(img, template, cv2.TM_CCOEFF_NORMED)
+    _, max_val, _, max_loc = cv2.minMaxLoc(res)
+    
+    if max_val >= threshold:
+        h, w = template.shape[:2]
+        center_x = max_loc[0] + w // 2
+        center_y = max_loc[1] + h // 2
+        return (center_x, center_y)
+    
+    return None
+
+
+def set_main_window_and_cache():
+    global main_hwnd, alt_hwnds, classic_btn_coords
+    
+    print("\n[!] Please click on your MAIN Roblox window to focus it, then press F1.")
+    
+    while not keyboard.is_pressed('F1'):
+        time.sleep(0.1)
+        
+    main_hwnd = win32gui.GetForegroundWindow()
+    if win32gui.GetWindowText(main_hwnd) != "Roblox":
+        print("[ERROR] The active window is not named 'Roblox'. Please try again.")
+        main_hwnd = None
+        return False
+        
+    all_hwnds = get_roblox_hwnds()
+    alt_hwnds = [h for h in all_hwnds if h != main_hwnd]
+    
+    print(f"\n[+] Main Window Locked! (HWND: {main_hwnd})")
+    print(f"[+] Detected {len(alt_hwnds)} Alt Accounts.")
+    time.sleep(1) 
+    
+    print("\n[!] Scanning main window for 'Select Classic.png'...")
+    force_foreground(main_hwnd)
+    time.sleep(0.5)
+    
+    classic_btn_coords = find_image_in_hwnd(main_hwnd, "Select Classic.png", threshold=0.80)
+    
+    if classic_btn_coords:
+        print(f"[+] Auto found Classic at: {classic_btn_coords}")
+    else:
+        print("\n[!] Could not auto find 'Classic'.")
+        print("[?] Hover your mouse over the middle of 'Classic' and press F2.")
+        while not keyboard.is_pressed('F2'):
+            time.sleep(0.1)
+        mx, my = pyautogui.position()
+        left, top, _, _ = win32gui.GetWindowRect(main_hwnd)
+        classic_btn_coords = (mx - left, my - top)
+        print(f"[+] Ensured Classic coords: {classic_btn_coords}")
+
+    print("\n[!] Verifying provided area.")
+    if not check_classic_button(0.50):
+        print("[WARNING] Could not verify Classic, it may fail.")
+    else:
+        print("[+] Select Classic ensured.")
+        
+    print("\n[+] Setup Complete, coordinates saved.")
+    return True
+    
+def check_classic_button(threshold=0.60):
+    if not classic_btn_coords: return False
+    
+    img = capture_window(main_hwnd)
+    if img is None: return False
+    
+    template_path = os.path.join(image_dir, "Select Classic.png")
+    template = cv2.imread(template_path)
+    if template is None: return False
+    
+    h, w = template.shape[:2]
+    x = max(0, classic_btn_coords[0] - w // 2 - 50)
+    y = max(0, classic_btn_coords[1] - h // 2 - 50)
+    
+    roi = img[y:y+h+100, x:x+w+100]
+    if roi.size == 0: return False
+    
+    res = cv2.matchTemplate(roi, template, cv2.TM_CCOEFF_NORMED)
+    _, max_val, _, _ = cv2.minMaxLoc(res)
+    
+    return max_val >= threshold
+
+def spam_q_f():
+    force_foreground(main_hwnd)
+    
+    kb_controller.press(KeyCode.from_char('q'))
+    time.sleep(0.01)
+    kb_controller.release(KeyCode.from_char('q'))
+    
+    time.sleep(0.05)
+    
+    kb_controller.press(KeyCode.from_char('f'))
+    time.sleep(0.01)
+    kb_controller.release(KeyCode.from_char('f'))
+    
+    time.sleep(0.05)
+
+def click_classic_5_times():
+    if not classic_btn_coords: return
+    
+    force_foreground(main_hwnd)
+    time.sleep(0.4)
+    
+    left, top, _, _ = win32gui.GetWindowRect(main_hwnd)
+    screen_x = left + classic_btn_coords[0]
+    screen_y = top + classic_btn_coords[1]
+    
+    pydirectinput.moveTo(int(screen_x), int(screen_y))
+    pydirectinput.move(2, 2)
+    pydirectinput.move(-2, -2)
+    
+    for _ in range(5):
+        if not is_running: break
+        pydirectinput.mouseDown()
+        time.sleep(0.05)
+        pydirectinput.mouseUp()
+        time.sleep(0.1)
+        
+    print("[*] Clicked classic 5 times.")
+
+
+def afk_farm_loop():
+    global is_running
+    
+    if not main_hwnd:
+        success = set_main_window_and_cache()
+        if not success:
+            is_running = False
+            return
+            
+    print("\n[*] Starting main loop.")
+    
+    while is_running:
+        print("\n[*] Waiting 5 minutes for alts.")
+        end_time = time.time() + (5 * 60)
+        
+        classic_clicked_this_round = False
+        was_classic_missing = False
+        
+        while time.time() < end_time:
+            if not is_running: return
+            
+            classic_present = check_classic_button()
+            
+            if not classic_present:
+                if not was_classic_missing:
+                    print("\n[-] Classic disappeared. Spamming Q/F.")
+                    was_classic_missing = True
+                    
+                spam_q_f()
+                classic_clicked_this_round = False
+            else:
+                if was_classic_missing:
+                    print("\n[+] Classic reappeared.")
+                    was_classic_missing = False
+                    
+                if not classic_clicked_this_round:
+                    print("[*] Classic detected, clicking Classic 5 times.")
+                    click_classic_5_times()
+                    classic_clicked_this_round = True
+                    print("[*] Waiting for Classic to disappear.")
+                
+            time.sleep(0.1)
+            
+            
+        print("\n[*] 5 minutes elapsed. Preparing to loop Alts.")
+        
+        while not check_classic_button() and is_running:
+            print("[*] Alt Wait: Main is clicking")
+            spam_q_f()
+            time.sleep(0.1)
+            
+        print("\n[*] Main ensured, beginning Alt loop.")
+        
+        for alt_hwnd in alt_hwnds:
+            if not is_running: return
+            
+            if not check_classic_button():
+                print("\n[!] STOP: Classic disappeared, going to main.")
+                
+                while not check_classic_button() and is_running:
+                    spam_q_f()
+                    time.sleep(0.1)
+                    
+                print("[*] Resuming Alts: Classic returned, clicking Classic 5 times.")
+                click_classic_5_times()
+                
+                print("[*] Main ensured. Resuming Alt cycle.")
+                
+            print(f"[*] Switching to Alt (HWND: {alt_hwnd})")
+            force_foreground(alt_hwnd)
+            time.sleep(2.5)
+            
+        print("\n[*] Loop complete! Starting again.")
+        
+                
+def toggle_macro():
+    global is_running
+    is_running = not is_running
+    
+    if is_running:
+        print("\n[+] Macro Started.")
+        threading.Thread(target=afk_farm_loop, daemon=True).start()
+    else:
+        print("\n[-] Macro Stopped.")
+
+
+if __name__ == "__main__":
+    pydirectinput.FAILSAFE = False
+    print("=======================")
+    print("      Holy Grail       ")
+    print("=====================\n")
+    required_images = ["Select Classic.png"]
+    
+    while True:
+        image_dir = input("Paste the path of your Holy Grail folder:\n> ").strip().strip('"').strip("'")
+        missing_images = []
+        for img in required_images:
+            if not os.path.isfile(os.path.join(image_dir, img)):
+                missing_images.append(img)
+                
+        if missing_images:
+            print("\n[ERROR] The required images were not found in the folder:")
+            for missing in missing_images:
+                print(f"  - {missing}")
+            print("Please check the path and try again.\n")
+        else:
+            print("\n[+] Image folder successfully ensured.")
+            break
+            
+    print("\nPress CTRL+H to Start or Stop the macro.")
+    print("Press CTRL+G to exit completely.")
+    
+    keyboard.add_hotkey('ctrl+h', toggle_macro)
+    keyboard.wait('ctrl+g')
