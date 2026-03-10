@@ -128,24 +128,24 @@ def set_main_window_and_cache():
     classic_btn_coords = find_image_in_hwnd(main_hwnd, "Select Classic.png", threshold=0.80)
     
     if classic_btn_coords:
-        print(f"[+] Auto found Classic at: {classic_btn_coords}")
+        print(f"[+] 'Classic' set: {classic_btn_coords}")
     else:
-        print("\n[!] Could not auto find 'Classic'.")
-        print("[?] Hover your mouse over the middle of 'Classic' and press F2.")
+        print("\n[!] Auto-find failed.")
+        print("[?] Hover over 'Classic' & press F2.")
         while not keyboard.is_pressed('F2'):
             time.sleep(0.1)
         mx, my = pyautogui.position()
-        left, top, _, _ = win32gui.GetWindowRect(main_hwnd)
-        classic_btn_coords = (mx - left, my - top)
-        print(f"[+] Ensured Classic coords: {classic_btn_coords}")
+        client_x, client_y = win32gui.ScreenToClient(main_hwnd, (mx, my))
+        classic_btn_coords = (client_x, client_y)
+        print(f"[+] Coords set: {classic_btn_coords}")
 
-    print("\n[!] Verifying provided area.")
+    print("\n[!] Verifying...")
     if not check_classic_button(0.50):
-        print("[WARNING] Could not verify Classic, it may fail.")
+        print("[-] 'Classic' verify failed.")
     else:
-        print("[+] Select Classic ensured.")
+        print("[+] 'Classic' verified.")
         
-    print("\n[+] Setup Complete, coordinates saved.")
+    print("\n[+] Setup Complete.")
     return True
     
 def check_classic_button(threshold=0.60):
@@ -191,11 +191,9 @@ def click_classic_5_times():
     force_foreground(main_hwnd)
     time.sleep(0.4)
     
-    left, top, _, _ = win32gui.GetWindowRect(main_hwnd)
-    screen_x = left + classic_btn_coords[0]
-    screen_y = top + classic_btn_coords[1]
+    screen_x, screen_y = win32gui.ClientToScreen(main_hwnd, (int(classic_btn_coords[0]), int(classic_btn_coords[1])))
     
-    pydirectinput.moveTo(int(screen_x), int(screen_y))
+    pydirectinput.moveTo(screen_x, screen_y)
     pydirectinput.move(2, 2)
     pydirectinput.move(-2, -2)
     
@@ -234,54 +232,57 @@ def afk_farm_loop():
             
             if not classic_present:
                 if not was_classic_missing:
-                    print("\n[-] Classic disappeared. Spamming Q/F.")
+                    print("\n[-] Button gone. Spamming Q/F.")
                     was_classic_missing = True
                     
                 spam_q_f()
                 classic_clicked_this_round = False
             else:
                 if was_classic_missing:
-                    print("\n[+] Classic reappeared.")
+                    print("\n[+] Button returned.")
                     was_classic_missing = False
                     
                 if not classic_clicked_this_round:
-                    print("[*] Classic detected, clicking Classic 5 times.")
+                    print("[*] Clicking Classic.")
                     click_classic_5_times()
                     classic_clicked_this_round = True
-                    print("[*] Waiting for Classic to disappear.")
                 
             time.sleep(0.1)
             
             
         print("\n[*] 5 minutes elapsed. Preparing to loop Alts.")
         
-        while not check_classic_button() and is_running:
-            print("[*] Alt Wait: Main is clicking")
-            spam_q_f()
-            time.sleep(0.1)
-            
-        print("\n[*] Main ensured, beginning Alt loop.")
-        
-        for alt_hwnd in alt_hwnds:
-            if not is_running: return
-            
-            if not check_classic_button():
-                print("\n[!] STOP: Classic disappeared, going to main.")
+        if len(alt_hwnds) > 0:
+            printed_alt_wait = False
+            while not check_classic_button() and is_running:
+                if not printed_alt_wait:
+                    print("[*] Alt Wait: Main is clicking (Waiting for mode to return)")
+                    printed_alt_wait = True
+                spam_q_f()
+                time.sleep(0.1)
                 
-                while not check_classic_button() and is_running:
-                    spam_q_f()
-                    time.sleep(0.1)
+            print("\n[*] Main ensured. Beginning Alt loop.")
+            
+            for alt_hwnd in alt_hwnds:
+                if not is_running: return
+                
+                if not check_classic_button():
+                    print("\n[!] STOP: Button gone, returning to main.")
                     
-                print("[*] Resuming Alts: Classic returned, clicking Classic 5 times.")
-                click_classic_5_times()
-                
-                print("[*] Main ensured. Resuming Alt cycle.")
-                
-            print(f"[*] Switching to Alt (HWND: {alt_hwnd})")
-            force_foreground(alt_hwnd)
-            time.sleep(2.5)
+                    while not check_classic_button() and is_running:
+                        spam_q_f()
+                        time.sleep(0.1)
+                        
+                    print("[*] Resuming: Clicking Classic.")
+                    click_classic_5_times()
+                    
+                print(f"[*] Switched to Alt (HWND: {alt_hwnd})")
+                force_foreground(alt_hwnd)
+                time.sleep(2.5)
+        else:
+            print("[*] No Alts detected.")
             
-        print("\n[*] Loop complete! Starting again.")
+        print("\n[*] Loop complete, starting again.")
         
                 
 def toggle_macro():
